@@ -28,7 +28,11 @@ use crate::{
 
 /// OpenID Connect 1.0 / OAuth 2.0 client.
 #[derive(Debug)]
-pub struct Client<P = Discovered, C: CompactJson + Claims = StandardClaims> {
+pub struct Client<
+    P = Discovered,
+    C: CompactJson + Claims = StandardClaims,
+    B: serde::de::DeserializeOwned + Into<Token<C>> = Bearer,
+> {
     /// OAuth provider.
     pub provider: P,
 
@@ -49,6 +53,7 @@ pub struct Client<P = Discovered, C: CompactJson + Claims = StandardClaims> {
     pub jwks: Option<JWKSet<Empty>>,
 
     marker: PhantomData<C>,
+    bearer_marker: PhantomData<B>,
 }
 
 // Common pattern in the Client::decode function when dealing with mismatched
@@ -78,6 +83,7 @@ impl<C: CompactJson + Claims, P: Clone> Clone for Client<P, C> {
             http_client: self.http_client.clone(),
             jwks,
             marker: PhantomData,
+            bearer_marker: PhantomData,
         }
     }
 }
@@ -119,7 +125,9 @@ impl<C: CompactJson + Claims> Client<Discovered, C> {
     }
 }
 
-impl<C: CompactJson + Claims, P: Provider + Configurable> Client<P, C> {
+impl<C: CompactJson + Claims, P: Provider + Configurable, B: serde::de::DeserializeOwned + Into<Token<C>>>
+    Client<P, C, B>
+{
     /// Passthrough to the redirect_url stored in inth_oauth2 as a str.
     pub fn redirect_url(&self) -> &str {
         self.redirect_uri
@@ -197,7 +205,7 @@ impl<C: CompactJson + Claims, P: Provider + Configurable> Client<P, C> {
         nonce: impl Into<Option<&str>>,
         max_age: impl Into<Option<&Duration>>,
     ) -> Result<Token<C>, Error> {
-        let bearer = self.request_token(auth_code).await.map_err(Error::from)?;
+        let bearer: B = self.request_token(auth_code).await.map_err(Error::from)?;
         let mut token: Token<C> = bearer.into();
         if let Some(id_token) = token.id_token.as_mut() {
             self.decode_token(id_token)?;
@@ -548,10 +556,11 @@ impl<C: CompactJson + Claims, P: Provider + Configurable> Client<P, C> {
     }
 }
 
-impl<P, C> Client<P, C>
+impl<P, C, B> Client<P, C, B>
 where
     P: Provider,
     C: CompactJson + Claims,
+    B: serde::de::DeserializeOwned + Into<Token<C>>,
 {
     /// Creates a client.
     ///
@@ -585,6 +594,7 @@ where
             http_client,
             jwks,
             marker: PhantomData,
+            bearer_marker: PhantomData,
         }
     }
 
@@ -644,7 +654,7 @@ where
     /// Requests an access token using an authorization code.
     ///
     /// See [RFC 6749, section 4.1.3](http://tools.ietf.org/html/rfc6749#section-4.1.3).
-    pub async fn request_token(&self, code: &str) -> Result<Bearer, ClientError> {
+    pub async fn request_token(&self, code: &str) -> Result<B, ClientError> {
         // Ensure the non thread-safe `Serializer` is not kept across
         // an `await` boundary by localizing it to this inner scope.
         let body = {
@@ -662,7 +672,7 @@ where
         };
 
         let json = self.post_token(body).await?;
-        let token: Bearer = serde_json::from_value(json)?;
+        let token: B = serde_json::from_value(json)?;
         Ok(token)
     }
 
