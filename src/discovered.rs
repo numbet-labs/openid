@@ -29,6 +29,10 @@ impl Configurable for Discovered {
     fn config(&self) -> &Config {
         &self.0
     }
+
+    fn config_mut(&mut self) -> &mut Config {
+        &mut self.0
+    }
 }
 
 impl From<Config> for Discovered {

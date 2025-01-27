@@ -135,10 +135,14 @@ impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer +
             .expect("We always require a redirect to construct client!")
     }
 
-    /// A reference to the config document of the provider obtained via
-    /// discovery
+    /// A reference to the config document of the provider obtained via discovery
     pub fn config(&self) -> &Config {
         self.provider.config()
+    }
+
+    /// A mutable reference to the config document of the provider obtained via discovery
+    pub fn config_mut(&mut self) -> &mut Config {
+        self.provider.config_mut()
     }
 
     /// Constructs the auth_url to redirect a client to the provider. Options

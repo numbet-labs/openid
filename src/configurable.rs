@@ -17,4 +17,7 @@ pub trait Configurable {
     /// let config = MyType::default().config();
     /// ```
     fn config(&self) -> &Config;
+
+    /// Returns a mutable reference to the configuration of this type.
+    fn config_mut(&mut self) -> &mut Config;
 }
