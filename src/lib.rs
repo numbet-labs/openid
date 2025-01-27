@@ -74,12 +74,14 @@ pub type IdToken<T> = Jws<T, Empty>;
 ///
 /// - [Discovered]
 /// - [StandardClaims]
-pub type DiscoveredClient = Client<Discovered, StandardClaims>;
+/// - [Bearer]
+pub type DiscoveredClient<B = Bearer> = Client<Discovered, StandardClaims, B>;
 /// Alias for discovered UMA2 [Client]
 ///
 /// See also:
 ///
 /// - [uma2::DiscoveredUma2]
 /// - [StandardClaims]
+/// - [Bearer]
 #[cfg(feature = "uma2")]
-pub type DiscoveredUma2Client = Client<uma2::DiscoveredUma2, StandardClaims>;
+pub type DiscoveredUma2Client<B = Bearer> = Client<uma2::DiscoveredUma2, StandardClaims, B>;
