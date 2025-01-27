@@ -12,7 +12,7 @@ use serde_json::Value;
 use url::{form_urlencoded::Serializer, Url};
 
 use crate::{
-    bearer::TemporalBearerGuard,
+    bearer::{ExpirableBearer, RefreshableBearer, TemporalBearerGuard},
     discovered,
     error::{
         ClientError, Decode, Error, Introspection as ErrorIntrospection, Jose,
@@ -31,7 +31,7 @@ use crate::{
 pub struct Client<
     P = Discovered,
     C: CompactJson + Claims = StandardClaims,
-    B: serde::de::DeserializeOwned + Into<Token<C>> = Bearer,
+    B /* : RefreshableBearer + serde::de::DeserializeOwned + Into<Token<C>> */ = Bearer,
 > {
     /// OAuth provider.
     pub provider: P,
@@ -125,7 +125,7 @@ impl<C: CompactJson + Claims> Client<Discovered, C> {
     }
 }
 
-impl<C: CompactJson + Claims, P: Provider + Configurable, B: serde::de::DeserializeOwned + Into<Token<C>>>
+impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer + serde::de::DeserializeOwned + Into<Token<C>>>
     Client<P, C, B>
 {
     /// Passthrough to the redirect_url stored in inth_oauth2 as a str.
@@ -560,7 +560,7 @@ impl<P, C, B> Client<P, C, B>
 where
     P: Provider,
     C: CompactJson + Claims,
-    B: serde::de::DeserializeOwned + Into<Token<C>>,
+    B: RefreshableBearer + serde::de::DeserializeOwned,
 {
     /// Creates a client.
     ///
@@ -685,7 +685,7 @@ where
         username: &str,
         password: &str,
         scope: impl Into<Option<&str>>,
-    ) -> Result<Bearer, ClientError> {
+    ) -> Result<B, ClientError> {
         // Ensure the non thread-safe `Serializer` is not kept across
         // an `await` boundary by localizing it to this inner scope.
         let body = {
@@ -702,7 +702,7 @@ where
         };
 
         let json = self.post_token(body).await?;
-        let token: Bearer = serde_json::from_value(json)?;
+        let token: B = serde_json::from_value(json)?;
         Ok(token)
     }
 
@@ -712,7 +712,7 @@ where
     pub async fn request_token_using_client_credentials(
         &self,
         scope: impl Into<Option<&str>>,
-    ) -> Result<Bearer, ClientError> {
+    ) -> Result<B, ClientError> {
         // Ensure the non thread-safe `Serializer` is not kept across
         // an `await` boundary by localizing it to this inner scope.
         let body = {
@@ -727,7 +727,7 @@ where
         };
 
         let json = self.post_token(body).await?;
-        let token: Bearer = serde_json::from_value(json)?;
+        let token: B = serde_json::from_value(json)?;
         Ok(token)
     }
 
@@ -736,9 +736,9 @@ where
     /// See [RFC 6749, section 6](http://tools.ietf.org/html/rfc6749#section-6).
     pub async fn refresh_token(
         &self,
-        token: impl AsRef<Bearer>,
+        token: impl AsRef<B>,
         scope: impl Into<Option<&str>>,
-    ) -> Result<Bearer, ClientError> {
+    ) -> Result<B, ClientError> {
         // Ensure the non thread-safe `Serializer` is not kept across
         // an `await` boundary by localizing it to this inner scope.
         let body = {
@@ -748,7 +748,7 @@ where
                 "refresh_token",
                 token
                     .as_ref()
-                    .refresh_token
+                    .refresh_token()
                     .as_deref()
                     .expect("No refresh_token field"),
             );
@@ -761,23 +761,11 @@ where
         };
 
         let json = self.post_token(body).await?;
-        let mut new_token: Bearer = serde_json::from_value(json)?;
-        if new_token.refresh_token.is_none() {
-            new_token.refresh_token = token.as_ref().refresh_token.clone();
+        let mut new_token: B = serde_json::from_value(json)?;
+        if new_token.refresh_token().is_none() {
+            new_token.set_refresh_token(token.as_ref().refresh_token().map(&str::to_owned).clone());
         }
         Ok(new_token)
-    }
-
-    /// Ensures an access token is valid by refreshing it if necessary.
-    pub async fn ensure_token(
-        &self,
-        token_guard: TemporalBearerGuard,
-    ) -> Result<TemporalBearerGuard, ClientError> {
-        if token_guard.expired() {
-            self.refresh_token(token_guard, None).await.map(From::from)
-        } else {
-            Ok(token_guard)
-        }
     }
 
     async fn post_token(&self, body: String) -> Result<Value, ClientError> {
@@ -820,6 +808,24 @@ where
     {
         if let Some(scope) = scope.into() {
             body.append_pair("scope", scope);
+        }
+    }
+}
+
+impl<P, C, B> Client<P, C, B>
+where
+    P: Provider,
+    C: CompactJson + Claims,
+    B: ExpirableBearer + RefreshableBearer + serde::de::DeserializeOwned {
+    /// Ensures an access token is valid by refreshing it if necessary.
+    pub async fn ensure_token(
+        &self,
+        token_guard: TemporalBearerGuard<B>,
+    ) -> Result<TemporalBearerGuard<B>, ClientError> {
+        if token_guard.expired() {
+            self.refresh_token(token_guard, None).await.map(From::from)
+        } else {
+            Ok(token_guard)
         }
     }
 }

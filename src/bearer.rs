@@ -3,6 +3,15 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+pub trait RefreshableBearer {
+    fn refresh_token(&self) -> Option<&str>;
+    fn set_refresh_token(&mut self, refresh_token: Option<String>);
+}
+
+pub trait ExpirableBearer {
+    fn expires_in(&self) -> Option<u64>;
+}
+
 /// The bearer token type.
 ///
 /// See:
@@ -54,14 +63,30 @@ pub struct Bearer {
     pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
+impl RefreshableBearer for Bearer {
+    fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
+    }
+
+    fn set_refresh_token(&mut self, refresh_token: Option<String>) {
+        self.refresh_token = refresh_token;
+    }
+}
+
+impl ExpirableBearer for Bearer {
+    fn expires_in(&self) -> Option<u64> {
+        self.expires_in
+    }
+}
+
 /// Manages bearer tokens along with their expiration times.
 #[derive(Debug)]
-pub struct TemporalBearerGuard {
-    bearer: Bearer,
+pub struct TemporalBearerGuard<B> {
+    bearer: B,
     expires_at: Option<DateTime<Utc>>,
 }
 
-impl TemporalBearerGuard {
+impl<B> TemporalBearerGuard<B> {
     /// Calculates whether the bearer has expired.
     ///
     /// The current time is compared to `self.expires_at` and a boolean
@@ -81,16 +106,17 @@ impl TemporalBearerGuard {
     }
 }
 
-impl AsRef<Bearer> for TemporalBearerGuard {
-    fn as_ref(&self) -> &Bearer {
+impl<B> AsRef<B> for TemporalBearerGuard<B> {
+    fn as_ref(&self) -> &B {
         &self.bearer
     }
 }
 
-impl From<Bearer> for TemporalBearerGuard {
-    fn from(bearer: Bearer) -> Self {
+
+impl<B: ExpirableBearer> From<B> for TemporalBearerGuard<B> {
+    fn from(bearer: B) -> Self {
         let expires_at = bearer
-            .expires_in
+            .expires_in()
             .map(|expires_in| Utc::now() + Duration::seconds(expires_in as i64));
         Self { bearer, expires_at }
     }
