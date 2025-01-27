@@ -43,7 +43,9 @@ pub mod uma2;
 
 pub use ::biscuit::{jws::Compact as Jws, Compact, CompactJson, Empty, SingleOrMultiple};
 pub use address::Address;
-pub use bearer::{Bearer, TemporalBearerGuard, RefreshableBearer, ExpirableBearer, IdBearer};
+pub use bearer::{
+    AccessTokenBearer, Bearer, ExpirableBearer, IdBearer, RefreshableBearer, TemporalBearerGuard,
+};
 pub use claims::Claims;
 pub use client::Client;
 pub use config::Config;
