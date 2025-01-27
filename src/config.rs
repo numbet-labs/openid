@@ -268,6 +268,11 @@ pub struct Config {
     /// is a part of the OAuth discovery draft.
     #[serde(default)]
     pub code_challenge_methods_supported: Option<Vec<String>>,
+
+    /// Whether the provider needs sending credentials in the body of the request.
+    /// This is non-standard and is used by some providers. eg. Twitch OIDC
+    #[serde(default)]
+    pub credentials_in_body: bool,
 }
 
 // This seems really dumb...

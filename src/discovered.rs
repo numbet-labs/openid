@@ -19,6 +19,10 @@ impl Provider for Discovered {
     fn token_uri(&self) -> &Url {
         &self.0.token_endpoint
     }
+
+    fn credentials_in_body(&self) -> bool {
+        self.0.credentials_in_body
+    }
 }
 
 impl Configurable for Discovered {
