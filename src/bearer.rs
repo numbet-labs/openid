@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Bearer token with an access_token
 pub trait AccessTokenBearer {
     /// The access_token getter
     fn access_token(&self) -> &str;
 }
 
+/// Bearer token with an id_token
 pub trait IdBearer {
     /// The id_token getter
     fn id_token(&self) -> Option<&str> {
@@ -15,6 +17,7 @@ pub trait IdBearer {
     }
 }
 
+/// Bearer token with a refresh_token
 pub trait RefreshableBearer {
     /// The refresh_token getter
     fn refresh_token(&self) -> Option<&str> {
@@ -26,6 +29,7 @@ pub trait RefreshableBearer {
     }
 }
 
+/// Bearer token with an expires_in
 pub trait ExpirableBearer {
     /// expires_in getter
     fn expires_in(&self) -> Option<u64> {
