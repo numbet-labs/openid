@@ -3,16 +3,37 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+pub trait AccessTokenBearer {
+    /// The access_token getter
+    fn access_token(&self) -> &str;
+}
+
+pub trait IdBearer {
+    /// The id_token getter
+    fn id_token(&self) -> Option<&str> {
+        None
+    }
+}
+
 pub trait RefreshableBearer {
-    fn refresh_token(&self) -> Option<&str>;
-    fn set_refresh_token(&mut self, refresh_token: Option<String>);
+    /// The refresh_token getter
+    fn refresh_token(&self) -> Option<&str> {
+        None
+    }
+    /// The refresh_token setter
+    fn set_refresh_token(&mut self, _refresh_token: Option<String>) {
+        // noop by default
+    }
 }
 
 pub trait ExpirableBearer {
-    fn expires_in(&self) -> Option<u64>;
+    /// expires_in getter
+    fn expires_in(&self) -> Option<u64> {
+        None
+    }
 }
 
-/// The bearer token type.
+/// The bearer token type per specification.
 ///
 /// See:
 /// - [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html#TokenResponse)
@@ -63,6 +84,12 @@ pub struct Bearer {
     pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
+impl AccessTokenBearer for Bearer {
+    fn access_token(&self) -> &str {
+        &self.access_token
+    }
+}
+
 impl RefreshableBearer for Bearer {
     fn refresh_token(&self) -> Option<&str> {
         self.refresh_token.as_deref()
@@ -76,6 +103,12 @@ impl RefreshableBearer for Bearer {
 impl ExpirableBearer for Bearer {
     fn expires_in(&self) -> Option<u64> {
         self.expires_in
+    }
+}
+
+impl IdBearer for Bearer {
+    fn id_token(&self) -> Option<&str> {
+        self.id_token.as_deref()
     }
 }
 

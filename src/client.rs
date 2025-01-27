@@ -12,7 +12,7 @@ use serde_json::Value;
 use url::{form_urlencoded::Serializer, Url};
 
 use crate::{
-    bearer::{ExpirableBearer, RefreshableBearer, TemporalBearerGuard},
+    bearer::{AccessTokenBearer, ExpirableBearer, RefreshableBearer, TemporalBearerGuard},
     discovered,
     error::{
         ClientError, Decode, Error, Introspection as ErrorIntrospection, Jose,
@@ -31,7 +31,7 @@ use crate::{
 pub struct Client<
     P = Discovered,
     C: CompactJson + Claims = StandardClaims,
-    B /* : RefreshableBearer + serde::de::DeserializeOwned + Into<Token<C>> */ = Bearer,
+    B = Bearer,
 > {
     /// OAuth provider.
     pub provider: P,
@@ -125,7 +125,7 @@ impl<C: CompactJson + Claims> Client<Discovered, C> {
     }
 }
 
-impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer + serde::de::DeserializeOwned + Into<Token<C>>>
+impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer + serde::de::DeserializeOwned + Into<Token<C, B>>>
     Client<P, C, B>
 {
     /// Passthrough to the redirect_url stored in inth_oauth2 as a str.
@@ -204,9 +204,9 @@ impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer +
         auth_code: &str,
         nonce: impl Into<Option<&str>>,
         max_age: impl Into<Option<&Duration>>,
-    ) -> Result<Token<C>, Error> {
+    ) -> Result<Token<C, B>, Error> {
         let bearer: B = self.request_token(auth_code).await.map_err(Error::from)?;
-        let mut token: Token<C> = bearer.into();
+        let mut token: Token<C, B> = bearer.into();
         if let Some(id_token) = token.id_token.as_mut() {
             self.decode_token(id_token)?;
             self.validate_token(id_token, nonce, max_age)?;
@@ -323,152 +323,7 @@ impl<C: CompactJson + Claims, P: Provider + Configurable, B: RefreshableBearer +
         Ok(())
     }
 
-    /// Get a userinfo json document for a given token at the provider's
-    /// userinfo endpoint. Returns [Standard Claims](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims) as [Userinfo] struct.
-    ///
-    /// # Errors
-    ///
-    /// - [ErrorUserinfo::NoUrl] if this provider doesn't have a userinfo
-    ///   endpoint
-    /// - [Error::Insecure] if the userinfo url is not https
-    /// - [Error::Jose] if the token is not decoded
-    /// - [Error::Http] if something goes wrong getting the document
-    /// - [Error::Json] if the response is not a valid Userinfo document
-    /// - [ErrorUserinfo::MissingSubject] if subject (sub) is missing
-    /// - [ErrorUserinfo::MismatchSubject] if the returned userinfo document and
-    ///   tokens subject mismatch
-    pub async fn request_userinfo(&self, token: &Token<C>) -> Result<Userinfo, Error> {
-        self.request_userinfo_custom(token).await
-    }
-
-    /// Get a userinfo json document for a given token at the provider's
-    /// userinfo endpoint. Returns [UserInfo Response](https://openid.net/specs/openid-connect-core-1_0.html#UserInfoResponse)
-    /// including non-standard claims. The sub (subject) Claim MUST always be
-    /// returned in the UserInfo Response.
-    ///
-    /// # Errors
-    ///
-    /// - [ErrorUserinfo::NoUrl] if this provider doesn't have a userinfo
-    ///   endpoint
-    /// - [Error::Insecure] if the userinfo url is not https
-    /// - [Decode::MissingKid] if the keyset has multiple keys but the key id on
-    ///   the token is missing
-    /// - [Decode::MissingKey] if the given key id is not in the key set
-    /// - [Decode::EmptySet] if the keyset is empty
-    /// - [Jose::WrongKeyType] if the alg of the key and the alg in the token
-    ///   header mismatch
-    /// - [Jose::WrongKeyType] if the specified key alg isn't a signature
-    ///   algorithm
-    /// - [Error::Jose] if the token is not decoded
-    /// - [Error::Http] if something goes wrong getting the document
-    /// - [Error::Json] if the response is not a valid Userinfo document
-    /// - [ErrorUserinfo::MissingSubject] if subject (sub) is missing
-    /// - [ErrorUserinfo::MismatchSubject] if the returned userinfo document and
-    ///   tokens subject mismatch
-    /// - [ErrorUserinfo::MissingContentType] if content-type header is missing
-    /// - [ErrorUserinfo::ParseContentType] if content-type header is not
-    ///   parsable
-    /// - [ErrorUserinfo::WrongContentType] if content-type header is not
-    ///   accepted
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use openid::{Bearer, DiscoveredClient, error::StandardClaimsSubjectMissing, StandardClaims, StandardClaimsSubject, Token};
-    /// # use serde::{Deserialize, Serialize};
-    /// # async fn _main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let bearer: Bearer = serde_json::from_str("{}").unwrap();
-    /// # let token = Token::<StandardClaims>::from(bearer);
-    /// # let client = DiscoveredClient::discover("client_id".to_string(), "client_secret".to_string(), "http://redirect".to_string(), url::Url::parse("http://issuer".into()).unwrap(),).await?;
-    /// #[derive(Debug, Deserialize, Serialize)]
-    /// struct CustomUserinfo(std::collections::HashMap<String, serde_json::Value>);
-    ///
-    /// impl StandardClaimsSubject for CustomUserinfo {
-    ///    fn sub(&self) -> Result<&str, StandardClaimsSubjectMissing> {
-    ///        self.0
-    ///            .get("sub")
-    ///            .and_then(|x| x.as_str())
-    ///            .ok_or(StandardClaimsSubjectMissing)
-    ///    }
-    /// }
-    ///
-    /// impl openid::CompactJson for CustomUserinfo {}
-    ///
-    /// let custom_userinfo: CustomUserinfo = client.request_userinfo_custom(&token).await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn request_userinfo_custom<U>(&self, token: &Token<C>) -> Result<U, Error>
-    where
-        U: StandardClaimsSubject,
-    {
-        match self.config().userinfo_endpoint {
-            Some(ref url) => {
-                let auth_code = token.bearer.access_token.to_string();
-
-                let response = self
-                    .http_client
-                    .get(url.clone())
-                    .bearer_auth(auth_code)
-                    .send()
-                    .await?
-                    .error_for_status()?;
-
-                let content_type = response
-                    .headers()
-                    .get(&CONTENT_TYPE)
-                    .and_then(|content_type| content_type.to_str().ok())
-                    .ok_or(ErrorUserinfo::MissingContentType)?;
-
-                let mime_type = match content_type {
-                    "application/json" => mime::APPLICATION_JSON,
-                    content_type => content_type.parse::<mime::Mime>().map_err(|_| {
-                        ErrorUserinfo::ParseContentType {
-                            content_type: content_type.to_string(),
-                        }
-                    })?,
-                };
-
-                let info: U = match (mime_type.type_(), mime_type.subtype().as_str()) {
-                    (mime::APPLICATION, "json") => {
-                        let info_value: Value = response.json().await?;
-                        if info_value.get("error").is_some() {
-                            let oauth2_error: OAuth2Error = serde_json::from_value(info_value)?;
-                            return Err(Error::ClientError(oauth2_error.into()));
-                        }
-                        serde_json::from_value(info_value)?
-                    }
-                    (mime::APPLICATION, "jwt") => {
-                        let jwt = response.text().await?;
-                        let mut jwt_encoded: Compact<U, Empty> = Compact::new_encoded(&jwt);
-                        self.decode_token(&mut jwt_encoded)?;
-                        let (_, info) = jwt_encoded.unwrap_decoded();
-                        info
-                    }
-                    _ => {
-                        return Err(ErrorUserinfo::WrongContentType {
-                            content_type: content_type.to_string(),
-                            body: response.bytes().await?.to_vec(),
-                        }
-                        .into())
-                    }
-                };
-
-                let claims = token.id_token.as_ref().map(|x| x.payload()).transpose()?;
-                if let Some(claims) = claims {
-                    let info_sub = info.sub().map_err(ErrorUserinfo::from)?;
-                    if claims.sub() != info_sub {
-                        let expected = info_sub.to_string();
-                        let actual = claims.sub().to_string();
-                        return Err(ErrorUserinfo::MismatchSubject { expected, actual }.into());
-                    }
-                }
-
-                Ok(info)
-            }
-            None => Err(ErrorUserinfo::NoUrl.into()),
-        }
-    }
-
+    
     /// Get a token introspection json document for a given token at the
     /// provider's token introspection endpoint. Returns [Token Introspection Response](https://datatracker.ietf.org/doc/html/rfc7662#section-2.2)
     /// as [TokenIntrospection] struct.
@@ -828,6 +683,157 @@ where
             Ok(token_guard)
         }
     }
+}
+
+impl<C: CompactJson + Claims, P: Provider + Configurable, B: serde::de::DeserializeOwned + AccessTokenBearer + RefreshableBearer + Into<Token<C, B>>>
+    Client<P, C, B>
+{
+    /// Get a userinfo json document for a given token at the provider's
+    /// userinfo endpoint. Returns [UserInfo Response](https://openid.net/specs/openid-connect-core-1_0.html#UserInfoResponse)
+    /// including non-standard claims. The sub (subject) Claim MUST always be
+    /// returned in the UserInfo Response.
+    ///
+    /// # Errors
+    ///
+    /// - [ErrorUserinfo::NoUrl] if this provider doesn't have a userinfo
+    ///   endpoint
+    /// - [Error::Insecure] if the userinfo url is not https
+    /// - [Decode::MissingKid] if the keyset has multiple keys but the key id on
+    ///   the token is missing
+    /// - [Decode::MissingKey] if the given key id is not in the key set
+    /// - [Decode::EmptySet] if the keyset is empty
+    /// - [Jose::WrongKeyType] if the alg of the key and the alg in the token
+    ///   header mismatch
+    /// - [Jose::WrongKeyType] if the specified key alg isn't a signature
+    ///   algorithm
+    /// - [Error::Jose] if the token is not decoded
+    /// - [Error::Http] if something goes wrong getting the document
+    /// - [Error::Json] if the response is not a valid Userinfo document
+    /// - [ErrorUserinfo::MissingSubject] if subject (sub) is missing
+    /// - [ErrorUserinfo::MismatchSubject] if the returned userinfo document and
+    ///   tokens subject mismatch
+    /// - [ErrorUserinfo::MissingContentType] if content-type header is missing
+    /// - [ErrorUserinfo::ParseContentType] if content-type header is not
+    ///   parsable
+    /// - [ErrorUserinfo::WrongContentType] if content-type header is not
+    ///   accepted
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use openid::{Bearer, DiscoveredClient, error::StandardClaimsSubjectMissing, StandardClaims, StandardClaimsSubject, Token};
+    /// # use serde::{Deserialize, Serialize};
+    /// # async fn _main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let bearer: Bearer = serde_json::from_str("{}").unwrap();
+    /// # let token = Token::<StandardClaims>::from(bearer);
+    /// # let client = DiscoveredClient::discover("client_id".to_string(), "client_secret".to_string(), "http://redirect".to_string(), url::Url::parse("http://issuer".into()).unwrap(),).await?;
+    /// #[derive(Debug, Deserialize, Serialize)]
+    /// struct CustomUserinfo(std::collections::HashMap<String, serde_json::Value>);
+    ///
+    /// impl StandardClaimsSubject for CustomUserinfo {
+    ///    fn sub(&self) -> Result<&str, StandardClaimsSubjectMissing> {
+    ///        self.0
+    ///            .get("sub")
+    ///            .and_then(|x| x.as_str())
+    ///            .ok_or(StandardClaimsSubjectMissing)
+    ///    }
+    /// }
+    ///
+    /// impl openid::CompactJson for CustomUserinfo {}
+    ///
+    /// let custom_userinfo: CustomUserinfo = client.request_userinfo_custom(&token).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn request_userinfo_custom<U>(&self, token: &Token<C, B>) -> Result<U, Error>
+    where
+        U: StandardClaimsSubject,
+    {
+        match self.config().userinfo_endpoint {
+            Some(ref url) => {
+                let auth_code = token.bearer.access_token().to_string();
+
+                let response = self
+                    .http_client
+                    .get(url.clone())
+                    .bearer_auth(auth_code)
+                    .send()
+                    .await?
+                    .error_for_status()?;
+
+                let content_type = response
+                    .headers()
+                    .get(&CONTENT_TYPE)
+                    .and_then(|content_type| content_type.to_str().ok())
+                    .ok_or(ErrorUserinfo::MissingContentType)?;
+
+                let mime_type = match content_type {
+                    "application/json" => mime::APPLICATION_JSON,
+                    content_type => content_type.parse::<mime::Mime>().map_err(|_| {
+                        ErrorUserinfo::ParseContentType {
+                            content_type: content_type.to_string(),
+                        }
+                    })?,
+                };
+
+                let info: U = match (mime_type.type_(), mime_type.subtype().as_str()) {
+                    (mime::APPLICATION, "json") => {
+                        let info_value: Value = response.json().await?;
+                        if info_value.get("error").is_some() {
+                            let oauth2_error: OAuth2Error = serde_json::from_value(info_value)?;
+                            return Err(Error::ClientError(oauth2_error.into()));
+                        }
+                        serde_json::from_value(info_value)?
+                    }
+                    (mime::APPLICATION, "jwt") => {
+                        let jwt = response.text().await?;
+                        let mut jwt_encoded: Compact<U, Empty> = Compact::new_encoded(&jwt);
+                        self.decode_token(&mut jwt_encoded)?;
+                        let (_, info) = jwt_encoded.unwrap_decoded();
+                        info
+                    }
+                    _ => {
+                        return Err(ErrorUserinfo::WrongContentType {
+                            content_type: content_type.to_string(),
+                            body: response.bytes().await?.to_vec(),
+                        }
+                        .into())
+                    }
+                };
+
+                let claims = token.id_token.as_ref().map(|x| x.payload()).transpose()?;
+                if let Some(claims) = claims {
+                    let info_sub = info.sub().map_err(ErrorUserinfo::from)?;
+                    if claims.sub() != info_sub {
+                        let expected = info_sub.to_string();
+                        let actual = claims.sub().to_string();
+                        return Err(ErrorUserinfo::MismatchSubject { expected, actual }.into());
+                    }
+                }
+
+                Ok(info)
+            }
+            None => Err(ErrorUserinfo::NoUrl.into()),
+        }
+    }
+
+    /// Get a userinfo json document for a given token at the provider's
+    /// userinfo endpoint. Returns [Standard Claims](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims) as [Userinfo] struct.
+    ///
+    /// # Errors
+    ///
+    /// - [ErrorUserinfo::NoUrl] if this provider doesn't have a userinfo
+    ///   endpoint
+    /// - [Error::Insecure] if the userinfo url is not https
+    /// - [Error::Jose] if the token is not decoded
+    /// - [Error::Http] if something goes wrong getting the document
+    /// - [Error::Json] if the response is not a valid Userinfo document
+    /// - [ErrorUserinfo::MissingSubject] if subject (sub) is missing
+    /// - [ErrorUserinfo::MismatchSubject] if the returned userinfo document and
+    ///   tokens subject mismatch
+    pub async fn request_userinfo(&self, token: &Token<C, B>) -> Result<Userinfo, Error> {
+        self.request_userinfo_custom(token).await
+    }
+
 }
 
 #[cfg(test)]
