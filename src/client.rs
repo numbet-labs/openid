@@ -12,18 +12,12 @@ use serde_json::Value;
 use url::{form_urlencoded::Serializer, Url};
 
 use crate::{
-    bearer::{AccessTokenBearer, ExpirableBearer, RefreshableBearer, TemporalBearerGuard},
-    discovered,
-    error::{
+    bearer::{AccessTokenBearer, ExpirableBearer, RefreshableBearer, TemporalBearerGuard}, discovered, error::{
         ClientError, Decode, Error, Introspection as ErrorIntrospection, Jose,
         Userinfo as ErrorUserinfo,
-    },
-    standard_claims_subject::StandardClaimsSubject,
-    validation::{
+    }, standard_claims_subject::StandardClaimsSubject, validation::{
         validate_token_aud, validate_token_exp, validate_token_issuer, validate_token_nonce,
-    },
-    Bearer, Claims, Config, Configurable, Discovered, IdToken, OAuth2Error, Options, Provider,
-    StandardClaims, Token, TokenIntrospection, Userinfo,
+    }, Bearer, Claims, Config, Configurable, CustomClaims, Discovered, IdToken, OAuth2Error, Options, Provider, StandardClaims, Token, TokenIntrospection, Userinfo
 };
 
 /// OpenID Connect 1.0 / OAuth 2.0 client.
@@ -68,8 +62,47 @@ macro_rules! wrong_key {
     };
 }
 
+impl<P, C: CompactJson + Claims, B> Client<P, C, B>
+{
+    /// Creates a client.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use openid::{Client, StandardClaims};
+    /// use openid::provider::google::Installed;
+    ///
+    /// let client: Client<_, StandardClaims> = Client::new(
+    ///     Installed,
+    ///     String::from("CLIENT_ID"),
+    ///     String::from("CLIENT_SECRET"),
+    ///     Some(String::from("urn:ietf:wg:oauth:2.0:oob")),
+    ///     reqwest::Client::new(), None,
+    /// );
+    /// ```
+    pub fn new(
+        provider: P,
+        client_id: String,
+        client_secret: impl Into<Option<String>>,
+        redirect_uri: impl Into<Option<String>>,
+        http_client: reqwest::Client,
+        jwks: Option<JWKSet<Empty>>,
+    ) -> Self {
+        Client {
+            provider,
+            client_id,
+            client_secret: client_secret.into(),
+            redirect_uri: redirect_uri.into(),
+            http_client,
+            jwks,
+            marker: PhantomData,
+            bearer_marker: PhantomData,
+        }
+    }
+}
+
 /// Implement clone if the provider can be cloned.
-impl<C: CompactJson + Claims, P: Clone> Clone for Client<P, C> {
+impl<C: CompactJson + Claims, P: Clone, B> Clone for Client<P, C, B> {
     fn clone(&self) -> Self {
         let jwks = self.jwks.as_ref().map(|jwks| JWKSet {
             keys: jwks.keys.clone(),
@@ -88,7 +121,7 @@ impl<C: CompactJson + Claims, P: Clone> Clone for Client<P, C> {
     }
 }
 
-impl<C: CompactJson + Claims> Client<Discovered, C> {
+impl<C: CompactJson + Claims, B> Client<Discovered, C, B> {
     /// Constructs a client from an issuer url and client parameters via
     /// discovery
     pub async fn discover(
@@ -421,42 +454,6 @@ where
     C: CompactJson + Claims,
     B: RefreshableBearer + serde::de::DeserializeOwned,
 {
-    /// Creates a client.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use openid::{Client, StandardClaims};
-    /// use openid::provider::google::Installed;
-    ///
-    /// let client: Client<_, StandardClaims> = Client::new(
-    ///     Installed,
-    ///     String::from("CLIENT_ID"),
-    ///     String::from("CLIENT_SECRET"),
-    ///     Some(String::from("urn:ietf:wg:oauth:2.0:oob")),
-    ///     reqwest::Client::new(), None,
-    /// );
-    /// ```
-    pub fn new(
-        provider: P,
-        client_id: String,
-        client_secret: impl Into<Option<String>>,
-        redirect_uri: impl Into<Option<String>>,
-        http_client: reqwest::Client,
-        jwks: Option<JWKSet<Empty>>,
-    ) -> Self {
-        Client {
-            provider,
-            client_id,
-            client_secret: client_secret.into(),
-            redirect_uri: redirect_uri.into(),
-            http_client,
-            jwks,
-            marker: PhantomData,
-            bearer_marker: PhantomData,
-        }
-    }
-
     /// Returns an authorization endpoint URI to direct the user to.
     ///
     /// This function is used by [Client::auth_url].
