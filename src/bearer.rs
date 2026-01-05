@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 /// Bearer token with an access_token
 pub trait AccessTokenBearer {
@@ -76,6 +77,7 @@ pub struct Bearer {
     /// expire in one hour from the time the response was generated.
     /// If omitted, the authorization server SHOULD provide the
     /// expiration time via other means or document the default value.
+    #[serde(default, deserialize_with = "expires_in")]
     pub expires_in: Option<u64>,
     /// ID Token value associated with the authenticated session.
     ///
@@ -85,7 +87,18 @@ pub struct Bearer {
     /// Additional properties which are not part of the standard OAuth 2.0
     /// response.
     #[serde(flatten)]
-    pub extra: Option<HashMap<String, serde_json::Value>>,
+    pub extra: Option<HashMap<String, Value>>,
+}
+
+fn expires_in<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Number(num) => Ok(num.as_u64()),
+        Value::String(s) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+        _ => Err(serde::de::Error::custom("expected number expression")),
+    }
 }
 
 impl AccessTokenBearer for Bearer {
@@ -219,5 +232,21 @@ mod tests {
         assert_eq!(None, bearer.scope);
         assert_eq!(None, bearer.refresh_token);
         assert_eq!(None, bearer.expires_in);
+    }
+
+    #[test]
+    fn from_response_expires_in_text() {
+        let json = r#"
+            {
+                "token_type":"Bearer",
+                "access_token":"aaaaaaaa",
+                "expires_in":"3600"
+            }
+        "#;
+        let bearer: Bearer = serde_json::from_str(json).unwrap();
+        assert_eq!("aaaaaaaa", bearer.access_token);
+        assert_eq!(None, bearer.scope);
+        assert_eq!(None, bearer.refresh_token);
+        assert_eq!(Some(3600), bearer.expires_in);
     }
 }
