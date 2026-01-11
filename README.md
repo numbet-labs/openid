@@ -1,10 +1,78 @@
 # OpenID Connect & Discovery client library using async / await
 
+Fork to make it more modular/configurable using a lot of traits and getters, so it can even support providers that differ from the spec.
+
 ## Legal
 
 Dual-licensed under `MIT` or the [UNLICENSE](http://unlicense.org/).
 
-## Features
+## Twitch OID support
+```rust
+[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub struct TwitchBearer {
+    access_token: String,
+    id_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
+    scope: Vec<String>,
+    token_type: Option<String>,
+}
+impl openid::RefreshableBearer for TwitchBearer {
+    fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
+    }
+    fn set_refresh_token(&mut self, refresh_token: Option<String>) {
+        self.refresh_token = refresh_token;
+    }
+}
+impl openid::ExpirableBearer for TwitchBearer {
+    fn expires_in(&self) -> Option<u64> {
+        self.expires_in
+    }
+}
+impl openid::AccessTokenBearer for TwitchBearer {
+    fn access_token(&self) -> &str {
+        &self.access_token
+    }
+}
+impl openid::IdBearer for TwitchBearer {
+    fn id_token(&self) -> Option<&str> {
+        self.id_token.as_deref()
+    }
+}
+
+pub type IODClientType = Option<std::sync::Arc<openid::DiscoveredClient<TwitchBearer>>>;
+
+pub async fn create_client() -> IODClientType {
+    let client_id = std::env::var("TWITCH_CLIENT_ID").expect("TWITCH_CLIENT_ID is not set");
+    let client_secret =
+        std::env::var("TWITCH_CLIENT_SECRET").expect("TWITCH_CLIENT_SECRET is not set");
+    let redirect_url = format!(
+        "https://{}/api/auth/twitch/callback",
+        std::env::var("PUBLIC_HOST").expect("PUBLIC_HOST is not set")
+    );
+    let twitch_issuer = Url::from_str("https://id.twitch.tv/oauth2").unwrap();
+    let reqwest_client = reqwest::Client::new();
+    let discovered: IODClientType = DiscoveredClient::discover_with_client(
+        reqwest::Client::new(),
+        client_id,
+        client_secret,
+        redirect_url,
+        twitch_issuer,
+    )
+    .await
+    .tap_err(|e| tracing::error!("Failed to discover Twitch client: {:?}", e))
+    .ok()
+    .map(|mut client| {
+        client.config_mut().credentials_in_body = true;
+        std::sync::Arc::new(client)
+    });
+    discovered
+}
+
+```
+
+## Original features
 
 Implements [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html) and [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html).
 
@@ -26,7 +94,7 @@ You can contribute to the ongoing development and maintenance of OpenID library 
 
 ### Sponsorship
 
-Your support, no matter how big or small, helps sustain the project and ensures its continued improvement. Reach out to explore sponsorship opportunities.
+Please sponsor the original author, not this fork:)
 
 ### Feedback
 
